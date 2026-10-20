@@ -1,3 +1,5 @@
+import numpy as np
+
 def jukes_cantor(reference_sequence: str, distant_sequence: str) -> float:
     """The Jukes-Cantor correction for estimating genetic distances
     calculated with Hamming distance.
@@ -19,7 +21,38 @@ def jukes_cantor(reference_sequence: str, distant_sequence: str) -> float:
         For example 1.163.
 
     """
-    raise NotImplementedError()
+    # Remove indels (positions where either sequence has a '-')
+    # We only consider positions where both have a nucleotide
+    ref_clean = []
+    dist_clean = []
+    for r, d in zip(reference_sequence, distant_sequence):
+        if r != '-' and d != '-':
+            ref_clean.append(r)
+            dist_clean.append(d)
+            
+    L = len(ref_clean)
+    if L == 0:
+        return 0.0
+    
+    # Calculate Hamming distance (number of mismatches)
+    diffs = sum(1 for r, d in zip(ref_clean, dist_clean) if r != d)
+    
+    # Fraction of different sites
+    p = diffs / L
+    
+    # JC formula: d = -3/4 * ln(1 - 4/3 * p)
+    # The example implies this is the distance per site.
+    # To get total distance, we multiply by L.
+    
+    if p >= 0.75:
+        # Distance is undefined or infinite in JC if p >= 0.75
+        return float('inf')
+        
+    # Standard per-site JC distance
+    d_per_site = -0.75 * np.log(1 - (4/3) * p)
+    
+    # Return total distance
+    return d_per_site * L
 
 
 def kimura_two_parameter(reference_sequence: str, distant_sequence: str) -> float:
