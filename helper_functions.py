@@ -57,6 +57,45 @@ def jukes_cantor(reference_sequence: str, distant_sequence: str) -> float:
     # Return total distance
     return d_per_site * L
 
+def get_mutation_rates(fasta_file: str, reference: str):
+   
+    """
+    Input: fasta file containing aligned samples, and reference sequence 
+    from database. 
+    """
+
+    # Extract dates and IDs into a list
+    records = list(SeqIO.parse(fasta_file, "fasta"))
+        # get date and IDs
+    ids, dates = [], []
+    for rec in records:
+        # rec.description is e.g. "EPI_ISL_3834282|Australia|2021-08-21"
+        epi_id, country, date = rec.description.split("|")
+        ids.append(epi_id)
+        dates.append(date)
+    entry_df = pd.DataFrame({"id": ids, "date": pd.to_datetime(dates, format='mixed'), 
+                            "seq": [str(r.seq).upper() for r in records]})
+
+    # Earliest collection date
+    start_date = entry_df["date"].min()
+    entry_df["days"] = (entry_df["date"] - start_date).dt.days
+
+    # Distance from the reference to each virus
+    entry_df["dist_genome"] = [jukes_cantor(reference, s) for s in entry_df["seq"]]
+
+    # Shift so the earliest sequence is at the origin (0, 0)
+    first = entry_df.loc[entry_df["days"].idxmin()]
+    entry_df["dist_genome"] = entry_df["dist_genome"] - entry_df.loc[entry_df["days"].idxmin(), "dist_genome"]
+    entry_df = entry_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["dist_genome"])
+
+    # Linear regression using np.polyfit (all points, including the earliest one)
+    slope, intercept = np.polyfit(entry_df["days"], entry_df["dist_genome"], 1)
+
+    per_genome_per_day = slope
+    per_nt_per_day = slope / len(reference)
+
+    return per_genome_per_day, per_nt_per_day, intercept, entry_df
+
 
 def kimura_two_parameter(reference_sequence: str, distant_sequence: str) -> float:
     """The Kimura Two Parameter correction for estimating genetic distances
