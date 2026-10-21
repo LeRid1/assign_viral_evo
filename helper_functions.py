@@ -84,12 +84,18 @@ def get_mutation_rates(fasta_file: str, reference: str):
     entry_df["dist_genome"] = [jukes_cantor(reference, s) for s in entry_df["seq"]]
 
     # Shift so the earliest sequence is at the origin (0, 0)
-    first = entry_df.loc[entry_df["days"].idxmin()]
-    entry_df["dist_genome"] = entry_df["dist_genome"] - entry_df.loc[entry_df["days"].idxmin(), "dist_genome"]
+    earliest_idx = entry_df["days"].idxmin()
+    entry_df["dist_genome"] = entry_df["dist_genome"] - entry_df.loc[earliest_idx, "dist_genome"]
     entry_df = entry_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["dist_genome"])
 
-    # Linear regression using np.polyfit (all points, including the earliest one)
+    # First regression: all points, including the earliest one
     slope, intercept = np.polyfit(entry_df["days"], entry_df["dist_genome"], 1)
+
+    # If the intercept is too large, drop the earliest (origin) sample and refit
+    if intercept > 5.0:
+        fit_df = entry_df.drop(index=earliest_idx, errors="ignore")
+        slope, intercept = np.polyfit(fit_df["days"], fit_df["dist_genome"], 1)
+
 
     per_genome_per_day = slope
     per_nt_per_day = slope / len(reference)
