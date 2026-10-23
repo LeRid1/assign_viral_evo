@@ -102,6 +102,126 @@ def get_mutation_rates(fasta_file: str, reference: str):
 
     return per_genome_per_day, per_nt_per_day, intercept, entry_df
 
+def compute_mutation_frequencies(fasta_file, alpha_ids, delta_ids, ref_id):
+    """
+    Compute per-position mutation frequencies (0 to 1) for the Alpha and Delta
+    variants relative to the NC_045512.2 reference.
+
+    Returns
+    -------
+    alpha_freq, delta_freq : np.ndarray
+        Arrays with the fraction of sequences differing from the reference
+        at each alignment position.
+    """
+    # Load all sequences keyed by record ID (uppercase)
+    records = {rec.id: str(rec.seq).upper()
+               for rec in SeqIO.parse(fasta_file, "fasta")}
+
+    def find_key(seq_id):
+        # Exact match first, then fall back to headers that contain the ID
+        if seq_id in records:
+            return seq_id
+        for k in records:
+            if seq_id in k:
+                return k
+        raise KeyError(f"Sequence {seq_id} not found in {fasta_path}")
+
+    ref = np.array(list(records[find_key(ref_id)]))
+
+    def variant_frequency(ids):
+        mismatches = []
+        for sid in ids:
+            seq = np.array(list(records[find_key(sid)]))
+            if len(seq) != len(ref):
+                raise ValueError(f"{sid} length differs from reference (not aligned?)")
+            mismatches.append(seq != ref)
+        return np.mean(mismatches, axis=0)
+
+    return variant_frequency(alpha_ids), variant_frequency(delta_ids)
+
+def plot_mutation_frequencies(alpha_freq, delta_freq, gene_locations,
+                              start=20000):
+    """
+    Plot mutation frequencies for Alpha and Delta (two stacked subplots),
+    showing only the genome region after `start` and marking gene locations.
+    """
+    gene_colors = plt.cm.tab10(np.linspace(0, 1, len(gene_locations)))
+    fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True, sharey=True)
+
+    for ax, freq, name in zip(axes, (alpha_freq, delta_freq), ("Alpha", "Delta")):
+        freq = np.asarray(freq)
+        x = np.arange(start, len(freq))
+        ax.plot(x, freq[start:], color="black", linewidth=0.8)
+
+        # Shade and label each gene
+        for (gene, (g_start, g_end)), color in zip(gene_locations.items(), gene_colors):
+            ax.axvspan(g_start, g_end, color=color, alpha=0.25, label=gene)
+            ax.text((g_start + g_end) / 2, 1.03, gene, ha="center", va="bottom",
+                    color=color, fontweight="bold",
+                    transform=ax.get_xaxis_transform())
+
+        ax.set_xlim(start, len(freq))
+        ax.set_ylim(0, 1.05)
+        ax.set_ylabel("Average mutation occurrence")
+        ax.set_title(f"{name} variant", pad=16)
+        ax.legend(title="Genes", loc="upper left", ncol=len(gene_locations),
+                  fontsize=8)
+
+    axes[-1].set_xlabel("Sequence index (nucleotide position)")
+    fig.tight_layout()
+
+    fig.savefig("problem3.svg", dpi=300)
+    plt.show()
+
+from collections import Counter
+
+def find_shared_s_mutations(alpha_freq, delta_freq, fasta_path,
+                            alpha_variants, delta_variants,
+                            reference_id,
+                            gene_locations, threshold=0.5):
+    """
+    Find sites in the S gene mutated (frequency > threshold) in BOTH variants.
+
+    Returns
+    -------
+    mutations_in_both_variants : list[int]
+        1-based reference positions where both variants have frequency > threshold.
+    same_mutation : list[str]
+        Subset of those sites where both variants carry the SAME new nucleotide,
+        formatted like "G123A" (reference base, 1-based site, variant base).
+    """
+    alpha_freq, delta_freq = np.asarray(alpha_freq), np.asarray(delta_freq)
+    records = list(SeqIO.parse(fasta_path, "fasta"))
+
+    def match(ids):
+        # exact ID match first, then fallback to substring match in longer headers
+        return [str(r.seq).upper() for r in records
+                if r.id in ids or any(v in r.description for v in ids)]
+
+    ref_seq = next(str(r.seq).upper() for r in records
+                   if r.id == reference_id or reference_id in r.description)
+    alpha_seqs, delta_seqs = match(alpha_variants), match(delta_variants)
+
+    def consensus(seqs, i):
+        return Counter(s[i] for s in seqs).most_common(1)[0][0]
+
+    # S gene coordinates are treated as 1-based and inclusive
+    s_start, s_end = gene_locations['S']
+    s_idx = np.arange(s_start - 1, s_end)
+
+    both = s_idx[(alpha_freq[s_idx] > threshold) & (delta_freq[s_idx] > threshold)]
+
+    mutations_in_both_variants = [int(i) + 1 for i in both]   # 1-based sites
+
+    same_mutation = []
+    for i in both:
+        ref_nt = ref_seq[i]
+        a_nt, d_nt = consensus(alpha_seqs, i), consensus(delta_seqs, i)
+        if a_nt == d_nt and a_nt != ref_nt and a_nt in "ACGT":
+            same_mutation.append(f"{ref_nt}{int(i) + 1}{a_nt}")
+
+    return mutations_in_both_variants, same_mutation
+
 
 def kimura_two_parameter(reference_sequence: str, distant_sequence: str) -> float:
     """The Kimura Two Parameter correction for estimating genetic distances
