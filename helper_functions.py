@@ -222,6 +222,74 @@ def find_shared_s_mutations(alpha_freq, delta_freq, fasta_path,
 
     return mutations_in_both_variants, same_mutation
 
+import csv
+import json
+
+def get_reference_spike(entrez_email = "z540752@ad.unsw.edu.au"):
+    """Download NC_045512.2 and return the translated spike (S) protein."""
+    Entrez.email = entrez_email
+    handle = Entrez.efetch(db="nucleotide", id="NC_045512.2",
+                           rettype="gb", retmode="text")
+    record = SeqIO.read(handle, "genbank")
+    handle.close()
+    for feat in record.features:
+        if feat.type == "CDS" and feat.qualifiers.get("gene", [""])[0] == "S":
+            return feat.qualifiers["translation"][0]
+    raise ValueError("Spike CDS not found in reference record")
+
+
+def classify_spikes(fasta_path="data/p5-aus-spike-proteins.fasta",
+                    variants_path="data/variants.json",
+                    out_path="problem5-classification.csv",
+                    threshold=0.51):
+    ref = get_reference_spike()
+
+    with open(variants_path) as f:
+        variants = json.load(f)
+
+    # Keep only spike nonsynonymous mutations for each variant
+    variant_muts = {}
+    for name, info in variants.items():
+        muts = [(m["pos"], m["right"])
+                for m in info.get("nonsynonymous", [])
+                if m.get("gene") == "S"]
+        if muts:
+            variant_muts[name] = muts
+
+    rows = []
+    for rec in SeqIO.parse(fasta_path, "fasta"):
+        accession = rec.description.split("|")[-1].strip()
+        seq = str(rec.seq).upper()
+
+        # Any mutation at all vs. the reference? (ignore X; '-' = deletion; ignore insertions).
+        has_mutation = any(
+            a != "X" and a != r
+            for a, r in zip(seq, ref)
+        )
+        if not has_mutation:
+            rows.append((accession, "NO_MUTATIONS"))
+            continue
+
+        # Percentage of each variant's mutations present in the sequence
+        best_name, best_frac = "UNKNOWN", 0.0
+        for name, muts in variant_muts.items():
+            matches = sum(
+                1 for pos, right in muts
+                if pos <= len(seq) and seq[pos - 1] == right  # 1-based -> 0-based
+            )
+            frac = matches / len(muts)
+            if frac > best_frac:
+                best_name, best_frac = name, frac
+
+        label = best_name if best_frac >= threshold else "UNKNOWN"
+        rows.append((accession, label))
+
+    # Write CSV with no header
+    with open(out_path, "w", newline="") as f:
+        csv.writer(f).writerows(rows)
+
+    return rows
+
 
 def kimura_two_parameter(reference_sequence: str, distant_sequence: str) -> float:
     """The Kimura Two Parameter correction for estimating genetic distances
