@@ -290,6 +290,61 @@ def classify_spikes(fasta_path="data/p5-aus-spike-proteins.fasta",
 
     return rows
 
+def plot_variant_distribution(fasta_path="data/p5-aus-spike-proteins.fasta",
+                              csv_path="problem5-classification.csv",
+                              out_path="problem5.svg"):
+    
+    # Load classifications from CSV file 
+    cls = pd.read_csv(csv_path, header=None, names=["accession", "variant"])
+
+    # Get collection dates from the FASTA headers
+    records = []
+    for rec in SeqIO.parse(fasta_path, "fasta"):
+        parts = rec.description.split("|")
+        records.append({"accession": parts[-1].strip(),
+                        "date": parts[1].strip()})
+    dates = pd.DataFrame(records)
+    dates["date"] = pd.to_datetime(dates["date"], format='mixed')
+
+    # Merge and drop rows without a usable date
+    df = cls.merge(dates, on="accession", how="inner").dropna(subset=["date"])
+
+    # Count each variant per month, then convert to percentages
+    counts = (df.groupby([pd.Grouper(key="date", freq="MS"), "variant"])
+                .size()
+                .unstack(fill_value=0)
+                .sort_index())
+    percentages = counts.div(counts.sum(axis=1), axis=0) * 100
+    ## Remove UNKNOWN and NO_MUTATIONS so they have been accounted for in 
+    # monthly percentages but are not plotted
+    percentages = percentages.drop(columns=["UNKNOWN", "NO_MUTATIONS"], errors="ignore")
+
+    # Fill months with no samples so the time axis is continuous
+    full_index = pd.date_range(percentages.index.min(),
+                               percentages.index.max(), freq="MS")
+    percentages = percentages.reindex(full_index).fillna(0)
+
+    # Stacked area plot
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.stackplot(percentages.index,
+                 [percentages[c] for c in percentages.columns],
+                 labels=percentages.columns)
+
+    ax.set_xlim(percentages.index.min(), percentages.index.max())
+    ax.set_ylim(0, 100)
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Percentage of sequences (%)")
+    ax.set_title("SARS-CoV-2 variant distribution over time (Australia)")
+    ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), title="Variant")
+
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(out_path, format="svg", bbox_inches="tight")
+    plt.show()
+    plt.close(fig)
+
+    return percentages
+
 
 def kimura_two_parameter(reference_sequence: str, distant_sequence: str) -> float:
     """The Kimura Two Parameter correction for estimating genetic distances
